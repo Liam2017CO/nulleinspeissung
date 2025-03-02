@@ -1,0 +1,293 @@
+[
+    {
+        "id": "inject_poll",
+        "type": "inject",
+        "z": "flow1",
+        "name": "Poll DTU & Shelly",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "10",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 100,
+        "y": 100,
+        "wires": [
+            [
+                "http_dtu",
+                "http_shelly"
+            ]
+        ]
+    },
+    {
+        "id": "http_dtu",
+        "type": "http request",
+        "z": "flow1",
+        "name": "Get DTU",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://192.168.179.152/api/livedata/status/inverters",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "x": 300,
+        "y": 80,
+        "wires": [
+            [
+                "set_topic_dtu"
+            ]
+        ]
+    },
+    {
+        "id": "set_topic_dtu",
+        "type": "change",
+        "z": "flow1",
+        "name": "Set Topic DTU",
+        "rules": [
+            {
+                "t": "set",
+                "p": "topic",
+                "pt": "msg",
+                "to": "http_dtu",
+                "tot": "str"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 500,
+        "y": 80,
+        "wires": [
+            [
+                "join_node"
+            ]
+        ]
+    },
+    {
+        "id": "http_shelly",
+        "type": "http request",
+        "z": "flow1",
+        "name": "Get Shelly",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://192.168.179.112/rpc/EM.GetStatus?id=0",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "x": 300,
+        "y": 140,
+        "wires": [
+            [
+                "set_topic_shelly"
+            ]
+        ]
+    },
+    {
+        "id": "set_topic_shelly",
+        "type": "change",
+        "z": "flow1",
+        "name": "Set Topic Shelly",
+        "rules": [
+            {
+                "t": "set",
+                "p": "topic",
+                "pt": "msg",
+                "to": "http_shelly",
+                "tot": "str"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 500,
+        "y": 140,
+        "wires": [
+            [
+                "join_node"
+            ]
+        ]
+    },
+    {
+        "id": "join_node",
+        "type": "join",
+        "z": "flow1",
+        "name": "Join DTU & Shelly",
+        "mode": "custom",
+        "build": "object",
+        "property": "payload",
+        "propertyType": "msg",
+        "key": "topic",
+        "joiner": "\\n",
+        "joinerType": "str",
+        "accumulate": false,
+        "timeout": "",
+        "count": "2",
+        "x": 700,
+        "y": 110,
+        "wires": [
+            [
+                "function_compute"
+            ]
+        ]
+    },
+    {
+        "id": "function_compute",
+        "type": "function",
+        "z": "flow1",
+        "name": "Compute Setpoints",
+        "func": "// Retrieve the responses from the join node\nvar dtu = msg.payload.http_dtu;\nvar shelly = msg.payload.http_shelly;\n\nif (!dtu || !shelly) {\n    node.error(\"Missing DTU or Shelly data\", msg);\n    return null;\n}\n\n// Extract grid power from Shelly\nvar grid_power = shelly.total_act_power;\n\n// Process inverter 1 from DTU (first inverter)\nvar inverter1 = dtu.inverters[0];\nvar inverter1_reachable = inverter1.reachable;\nvar inverter1_limit = parseInt(inverter1.limit_absolute) || 0;\nvar inverter1_setpoint = null;\nif (inverter1_reachable && grid_power !== null) {\n    inverter1_setpoint = grid_power + inverter1_limit - 5;\n    if (inverter1_setpoint > 2000) inverter1_setpoint = 2000;\n    if (inverter1_setpoint < 200) inverter1_setpoint = 200;\n}\n\n// Process inverter 2 (if available)\nvar inverter2 = dtu.inverters[1];\nvar inverter2_limit = (inverter2 && inverter2.limit_absolute) ? parseInt(inverter2.limit_absolute) : 200;\nvar shortfall = 0;\nif (inverter1_setpoint !== null && inverter1_setpoint < 2000) {\n    shortfall = 0;\n} else {\n    shortfall = grid_power - 2000;\n    if (shortfall < 0) { shortfall = 0; }\n}\nvar inverter2_setpoint = inverter2_limit + shortfall - 5;\nif (inverter2_setpoint > 1500) inverter2_setpoint = 1500;\nif (inverter2_setpoint < 200) inverter2_setpoint = 200;\n\n// Prepare computed values object\nmsg.payload = {\n    grid_power: grid_power,\n    inverter1_setpoint: inverter1_setpoint,\n    inverter2_setpoint: inverter2_setpoint\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 110,
+        "wires": [
+            [
+                "debug_computed",
+                "function_update_inverter1",
+                "function_update_inverter2"
+            ]
+        ]
+    },
+    {
+        "id": "debug_computed",
+        "type": "debug",
+        "z": "flow1",
+        "name": "Computed Values",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 1100,
+        "y": 110,
+        "wires": []
+    },
+    {
+        "id": "function_update_inverter1",
+        "type": "function",
+        "z": "flow1",
+        "name": "Prepare Inverter1 Update",
+        "func": "var sp = msg.payload.inverter1_setpoint;\nif (sp !== null) {\n    msg.payload = 'data={\"serial\":\"116492226387\",\"limit_type\":0,\"limit_value\":' + sp + '}';\n    return msg;\n}\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 200,
+        "wires": [
+            [
+                "http_post_inverter1"
+            ]
+        ]
+    },
+    {
+        "id": "function_update_inverter2",
+        "type": "function",
+        "z": "flow1",
+        "name": "Prepare Inverter2 Update",
+        "func": "var sp = msg.payload.inverter2_setpoint;\nif (sp !== null) {\n    msg.payload = 'data={\"serial\":\"1164a00b64e3\",\"limit_type\":0,\"limit_value\":' + sp + '}';\n    return msg;\n}\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 260,
+        "wires": [
+            [
+                "http_post_inverter2"
+            ]
+        ]
+    },
+    {
+        "id": "http_post_inverter1",
+        "type": "http request",
+        "z": "flow1",
+        "name": "POST Inverter1",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "http://192.168.179.152/api/limit/config",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "basic",
+        "x": 1100,
+        "y": 200,
+        "wires": [
+            [
+                "debug_post_inverter1"
+            ]
+        ]
+    },
+    {
+        "id": "http_post_inverter2",
+        "type": "http request",
+        "z": "flow1",
+        "name": "POST Inverter2",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "http://192.168.179.152/api/limit/config",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "basic",
+        "x": 1100,
+        "y": 260,
+        "wires": [
+            [
+                "debug_post_inverter2"
+            ]
+        ]
+    },
+    {
+        "id": "debug_post_inverter1",
+        "type": "debug",
+        "z": "flow1",
+        "name": "Inverter1 Update Resp",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 1300,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "debug_post_inverter2",
+        "type": "debug",
+        "z": "flow1",
+        "name": "Inverter2 Update Resp",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 1300,
+        "y": 260,
+        "wires": []
+    }
+]
